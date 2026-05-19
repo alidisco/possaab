@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   title: "Saab Electric POS",
   description: "Professional Point of Sale & Inventory Management System",
 };
+
 export default async function LocaleLayout({
   children,
   params,

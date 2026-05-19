@@ -1,0 +1,15 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.saabelectric.pos
+productName: Saab Electric POS
+win:
+  target: nsis
+  icon: resources/icon.ico
+files:
+  - filter:
+      - electron/**/*
+      - .next/**/*
+      - public/**/*
+      - package.json
+electronVersion: 42.2.0

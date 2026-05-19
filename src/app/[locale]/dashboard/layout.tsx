@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useTranslations, useLocale } from 'next-intl';
 import { useAuthStore, useUIStore } from '@/lib/store';
@@ -9,8 +9,8 @@ import {
   LayoutDashboard, ShoppingCart, Package, Layers, Warehouse,
   Users, Truck, FileText, Receipt, DollarSign, RotateCcw,
   BarChart3, UserCog, Settings, Database, Barcode,
-  ChevronLeft, ChevronRight, Zap, LogOut, Globe, Menu,
-  Bell, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen,
+  Zap, LogOut, Globe, Bell, Search, Sun, Moon,
+  PanelLeftClose, PanelLeftOpen, X, ChevronRight, Command,
 } from 'lucide-react';
 
 const navItems = [
@@ -43,293 +43,342 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, isAuthenticated, logout } = useAuthStore();
   const { sidebarCollapsed, toggleSidebar, theme, toggleTheme } = useUIStore();
 
-  // Apply theme class on mount & whenever theme changes
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [cmdQuery, setCmdQuery] = useState('');
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const cmdInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     document.documentElement.classList.toggle('light', theme === 'light');
   }, [theme]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user) {
-      router.push(`/${locale}/login`);
-    }
+    if (!isAuthenticated || !user) router.push(`/${locale}/login`);
   }, [isAuthenticated, user, router, locale]);
+
+  // Command palette keyboard shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setCmdOpen(prev => !prev);
+      }
+      if (e.key === 'Escape') {
+        setCmdOpen(false);
+        setShowUserMenu(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Focus command input when palette opens
+  useEffect(() => {
+    if (cmdOpen) setTimeout(() => cmdInputRef.current?.focus(), 50);
+  }, [cmdOpen]);
+
+  // Close user menu on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   if (!isAuthenticated || !user) return null;
 
-  const handleLogout = () => {
-    logout();
-    router.push(`/${locale}/login`);
-  };
+  const handleLogout = () => { logout(); router.push(`/${locale}/login`); };
 
   const toggleLocale = () => {
     const newLocale = locale === 'en' ? 'ar' : 'en';
-    const newPath = pathname.replace(`/${locale}`, `/${newLocale}`);
-    router.push(newPath);
+    router.push(pathname.replace(`/${locale}`, `/${newLocale}`));
   };
 
   const isActive = (href: string) => {
-    const fullPath = `/${locale}${href}`;
-    if (href === '/dashboard') return pathname === fullPath;
-    return pathname.startsWith(fullPath);
+    const full = `/${locale}${href}`;
+    return href === '/dashboard' ? pathname === full : pathname.startsWith(full);
   };
 
   const isRTL = locale === 'ar';
 
+  // Command palette items
+  const allNavItems = navItems.filter(i => !('divider' in i)) as Array<{ key: string; icon: React.ElementType; href: string; adminOnly: boolean }>;
+  const filteredCmds = cmdQuery
+    ? allNavItems.filter(i => t(`nav.${i.key}`).toLowerCase().includes(cmdQuery.toLowerCase()))
+    : allNavItems.slice(0, 8);
+
+  // Current page label for header
+  const currentNav = allNavItems.find(i => isActive(i.href));
+
   return (
     <div className="flex h-screen overflow-hidden print:h-auto print:overflow-visible">
+
       {/* ── Sidebar ── */}
       <aside
-        className={`sidebar flex flex-col h-full print:hidden ${sidebarCollapsed ? 'w-[68px]' : 'w-[252px]'}`}
-        style={{ transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}
+        className={`sidebar flex flex-col h-full print:hidden shrink-0 ${sidebarCollapsed ? 'w-[64px]' : 'w-[248px]'}`}
+        style={{ transition: 'width 0.28s cubic-bezier(0.4,0,0.2,1)' }}
       >
         {/* Logo */}
-        <div
-          className="flex items-center gap-3 px-4 h-16 shrink-0"
-          style={{ borderBottom: '1px solid var(--sidebar-border)' }}
-        >
+        <div className="flex items-center gap-3 px-3.5 h-16 shrink-0" style={{ borderBottom: '1px solid var(--sidebar-border)' }}>
           <div
-            className="flex items-center justify-center w-9 h-9 rounded-xl shrink-0"
+            className="flex items-center justify-center w-8 h-8 rounded-xl shrink-0"
             style={{
-              background: 'linear-gradient(135deg, rgba(59,130,246,0.25), rgba(139,92,246,0.25))',
-              border: '1px solid rgba(59,130,246,0.35)',
-              boxShadow: '0 0 16px rgba(59,130,246,0.2)',
+              background: 'linear-gradient(135deg, rgba(59,130,246,0.22), rgba(139,92,246,0.22))',
+              border: '1px solid rgba(96,165,250,0.3)',
+              boxShadow: '0 0 16px rgba(59,130,246,0.18)',
             }}
           >
-            <Zap size={18} style={{ color: '#60a5fa' }} />
+            <Zap size={16} style={{ color: '#93c5fd' }} />
           </div>
           {!sidebarCollapsed && (
-            <div className="animate-fade-in overflow-hidden">
-              <h1 className="text-sm font-bold gradient-text whitespace-nowrap">Saab Electric</h1>
-              <p className="text-[10px] whitespace-nowrap" style={{ color: 'var(--sidebar-text)', opacity: 0.7 }}>
-                POS System
-              </p>
+            <div className="animate-fade-in overflow-hidden min-w-0">
+              <h1 className="text-sm font-bold gradient-text whitespace-nowrap leading-tight">Saab Electric</h1>
+              <p className="text-[10px] whitespace-nowrap leading-tight" style={{ color: 'var(--sidebar-text)' }}>POS System</p>
             </div>
           )}
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-3 no-scrollbar">
-          {navItems.map((item, index) => {
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto py-2">
+          {navItems.map((item, idx) => {
             if ('divider' in item && item.divider) {
-              if (sidebarCollapsed) {
-                return (
-                  <div
-                    key={index}
-                    className="my-2 mx-3"
-                    style={{ height: '1px', background: 'var(--sidebar-border)' }}
-                  />
-                );
-              }
-              return (
-                <div key={index} className="px-5 pt-5 pb-1">
-                  <span className="section-header" style={{ color: 'var(--sidebar-text)', opacity: 0.55 }}>
-                    {t(`nav.${item.label.toLowerCase()}`)}
+              return sidebarCollapsed ? (
+                <div key={idx} className="my-1.5 mx-2.5" style={{ height: '1px', background: 'var(--sidebar-border)' }} />
+              ) : (
+                <div key={idx} className="px-4 pt-4 pb-1">
+                  <span className="section-header" style={{ color: 'var(--sidebar-text)', opacity: 0.5 }}>
+                    {t(`nav.${item.label!.toLowerCase()}`)}
                   </span>
                 </div>
               );
             }
 
-            const navItem = item as { key: string; icon: React.ElementType; href: string; adminOnly: boolean };
-            if (navItem.adminOnly && user.role !== 'admin') return null;
-
-            const Icon = navItem.icon;
-            const active = isActive(navItem.href);
+            const ni = item as { key: string; icon: React.ElementType; href: string; adminOnly: boolean };
+            if (ni.adminOnly && user.role !== 'admin') return null;
+            const Icon = ni.icon;
+            const active = isActive(ni.href);
 
             return (
               <Link
-                key={navItem.key}
-                href={`/${locale}${navItem.href}`}
+                key={ni.key}
+                href={`/${locale}${ni.href}`}
                 className={`sidebar-link ${active ? 'active' : ''}`}
-                title={sidebarCollapsed ? t(`nav.${navItem.key}`) : undefined}
+                title={sidebarCollapsed ? t(`nav.${ni.key}`) : undefined}
+                style={{ justifyContent: sidebarCollapsed ? 'center' : undefined }}
               >
-                <Icon size={18} className="shrink-0" />
-                {!sidebarCollapsed && (
-                  <span className="truncate">{t(`nav.${navItem.key}`)}</span>
-                )}
+                <Icon size={17} className="shrink-0" />
+                {!sidebarCollapsed && <span className="truncate">{t(`nav.${ni.key}`)}</span>}
                 {active && !sidebarCollapsed && (
-                  <span
-                    className="ms-auto w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: 'var(--color-primary-400)', boxShadow: '0 0 6px var(--color-primary-400)' }}
-                  />
+                  <span className="ms-auto w-1 h-1 rounded-full shrink-0" style={{
+                    background: 'var(--color-primary-400)',
+                    boxShadow: '0 0 6px var(--color-primary-400)',
+                  }} />
                 )}
               </Link>
             );
           })}
         </nav>
 
-        {/* Bottom: collapse toggle */}
-        <div
-          className="p-3 shrink-0"
-          style={{ borderTop: '1px solid var(--sidebar-border)' }}
-        >
+        {/* Collapse toggle */}
+        <div className="p-2 shrink-0" style={{ borderTop: '1px solid var(--sidebar-border)' }}>
           <button
             onClick={toggleSidebar}
             className="sidebar-link w-full"
-            style={{ justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }}
-            id="sidebar-toggle"
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={{ justifyContent: sidebarCollapsed ? 'center' : undefined, margin: 0 }}
+            title={sidebarCollapsed ? 'Expand' : 'Collapse'}
           >
-            {sidebarCollapsed ? (
-              isRTL ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />
-            ) : (
-              isRTL ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />
-            )}
-            {!sidebarCollapsed && (
-              <span className="text-[13px]">{t('common.collapse')}</span>
-            )}
+            {sidebarCollapsed
+              ? (isRTL ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />)
+              : (isRTL ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />)
+            }
+            {!sidebarCollapsed && <span className="text-[12.5px]">{t('common.collapse')}</span>}
           </button>
         </div>
       </aside>
 
-      {/* ── Main content area ── */}
-      <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg-base)' }}>
+      {/* ── Main ── */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
         {/* Top bar */}
         <header
           className="flex items-center justify-between h-16 px-5 shrink-0 print:hidden"
           style={{
             background: 'var(--header-bg)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
+            backdropFilter: 'blur(24px)',
+            WebkitBackdropFilter: 'blur(24px)',
             borderBottom: '1px solid var(--border-subtle)',
-            boxShadow: 'var(--shadow-sm)',
+            boxShadow: 'var(--shadow-xs)',
           }}
         >
-          {/* Left */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={toggleSidebar}
-              className="lg:hidden btn btn-ghost p-2"
-              style={{ borderRadius: 8 }}
-            >
-              <Menu size={19} />
-            </button>
+          {/* Left — page label + search */}
+          <div className="flex items-center gap-4">
+            {currentNav && (
+              <div className="hidden lg:flex items-center gap-2 text-sm animate-fade-in">
+                <span style={{ color: 'var(--text-tertiary)' }}>{t('nav.dashboard')}</span>
+                <ChevronRight size={13} style={{ color: 'var(--text-tertiary)' }} />
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{t(`nav.${currentNav.key}`)}</span>
+              </div>
+            )}
 
-            {/* Search */}
-            <div
-              className="hidden md:flex items-center gap-2.5 px-3.5 py-2 rounded-lg w-72"
-              style={{
-                background: 'var(--input-bg)',
-                border: '1px solid var(--border-default)',
-              }}
+            {/* Search trigger (command palette) */}
+            <button
+              onClick={() => setCmdOpen(true)}
+              className="hidden md:flex search-trigger"
             >
-              <Search size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-              <input
-                type="text"
-                placeholder={t('common.search')}
-                className="bg-transparent border-none outline-none text-sm w-full"
-                style={{
-                  color: 'var(--text-primary)',
-                  caretColor: 'var(--color-primary-400)',
-                  fontSize: '13.5px',
-                }}
-                id="global-search"
-              />
-              <kbd
-                className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px]"
-                style={{
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-default)',
-                  color: 'var(--text-tertiary)',
-                  fontFamily: 'inherit',
-                }}
-              >
-                ⌘K
-              </kbd>
-            </div>
+              <Search size={13} />
+              <span className="flex-1">{t('common.search')}</span>
+              <span className="flex items-center gap-0.5">
+                <kbd style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 5, padding: '1px 5px', fontSize: 10, color: 'var(--text-tertiary)' }}>⌘</kbd>
+                <kbd style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 5, padding: '1px 5px', fontSize: 10, color: 'var(--text-tertiary)' }}>K</kbd>
+              </span>
+            </button>
           </div>
 
           {/* Right */}
-          <div className="flex items-center gap-1.5">
-
-            {/* Theme toggle */}
+          <div className="flex items-center gap-1">
             <button
               onClick={toggleTheme}
-              className="btn btn-ghost p-2 rounded-lg transition-all duration-300 hover:scale-110 hover:rotate-45"
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              style={{ position: 'relative' }}
+              className="btn btn-ghost btn-icon hover-scale"
+              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
             >
-              {theme === 'dark' ? (
-                <Sun size={17} style={{ color: 'var(--text-secondary)' }} />
-              ) : (
-                <Moon size={17} style={{ color: 'var(--text-secondary)' }} />
-              )}
+              {theme === 'dark'
+                ? <Sun size={16} style={{ color: 'var(--text-secondary)' }} />
+                : <Moon size={16} style={{ color: 'var(--text-secondary)' }} />
+              }
             </button>
 
-            {/* Notifications */}
-            <button
-              className="btn btn-ghost p-2 rounded-lg relative hover-bell-wiggle transition-all duration-300 hover:scale-110"
-              id="notifications-btn"
-            >
-              <Bell size={17} style={{ color: 'var(--text-secondary)' }} />
-              <span
-                className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full"
-                style={{ background: 'var(--color-danger-500)', boxShadow: '0 0 0 2px var(--header-bg)' }}
-              />
+            <button className="btn btn-ghost btn-icon hover-bell-wiggle relative">
+              <Bell size={16} style={{ color: 'var(--text-secondary)' }} />
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-danger-500)', boxShadow: '0 0 0 2px var(--header-bg)' }} />
             </button>
 
-            {/* Language toggle */}
-            <button
-              onClick={toggleLocale}
-              className="btn btn-ghost p-2 rounded-lg transition-all duration-300 hover:scale-110 hover:-rotate-12"
-              id="header-language-toggle"
-              title="Switch language"
-            >
-              <Globe size={17} style={{ color: 'var(--text-secondary)' }} />
+            <button onClick={toggleLocale} className="btn btn-ghost btn-icon hover-scale" title="Switch language">
+              <Globe size={16} style={{ color: 'var(--text-secondary)' }} />
             </button>
 
-            {/* Divider */}
-            <div
-              className="w-px h-6 mx-1"
-              style={{ background: 'var(--border-subtle)' }}
-            />
+            <div className="w-px h-5 mx-1" style={{ background: 'var(--border-subtle)' }} />
 
-            {/* User section */}
-            <div className="flex items-center gap-2.5 ps-1">
-              <div className="hidden sm:block" style={{ textAlign: isRTL ? 'left' : 'right' }}>
-                <p className="text-[13px] font-semibold leading-tight" style={{ color: 'var(--text-primary)' }}>
-                  {user.name}
-                </p>
-                <p className="text-[11px] capitalize leading-tight" style={{ color: 'var(--text-tertiary)' }}>
-                  {user.role}
-                </p>
-              </div>
-
-              {/* Avatar */}
-              <div
-                className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold text-white shrink-0 select-none transition-all duration-300 hover:scale-110 hover:rotate-6 cursor-pointer"
-                style={{
-                  background: 'linear-gradient(135deg, var(--color-primary-600), var(--color-accent-600))',
-                  boxShadow: '0 2px 8px rgba(37,99,235,0.35)',
-                }}
-              >
-                {user.name.charAt(0).toUpperCase()}
-              </div>
-
-              {/* Logout */}
+            {/* User menu */}
+            <div className="relative" ref={userMenuRef}>
               <button
-                onClick={handleLogout}
-                className="btn btn-ghost p-2 rounded-lg transition-all duration-300 hover:scale-110"
-                id="logout-btn"
-                title={t('auth.logout')}
-                style={{ color: 'var(--text-tertiary)' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-danger-400)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                onClick={() => setShowUserMenu(prev => !prev)}
+                className="user-menu-btn"
               >
-                <LogOut size={16} />
+                <div className="hidden sm:block" style={{ textAlign: isRTL ? 'left' : 'right' }}>
+                  <p className="text-[12.5px] font-semibold leading-tight" style={{ color: 'var(--text-primary)' }}>{user.name}</p>
+                  <p className="text-[10.5px] capitalize leading-tight" style={{ color: 'var(--text-tertiary)' }}>{user.role}</p>
+                </div>
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                  style={{ background: 'linear-gradient(135deg, var(--color-primary-600), var(--color-accent-600))', boxShadow: '0 2px 8px rgba(37,99,235,0.3)' }}
+                >
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
               </button>
+
+              {showUserMenu && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-48 glass-card p-1.5 animate-fade-up"
+                  style={{ zIndex: 1000, minWidth: 180 }}
+                >
+                  <div className="px-3 py-2 mb-1" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    <p className="text-[12.5px] font-semibold" style={{ color: 'var(--text-primary)' }}>{user.name}</p>
+                    <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{user.role}</p>
+                  </div>
+                  <Link
+                    href={`/${locale}/dashboard/settings`}
+                    className="dropdown-item"
+                    onClick={() => setShowUserMenu(false)}
+                  >
+                    <Settings size={14} />
+                    {t('nav.settings')}
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    className="dropdown-item dropdown-item-danger"
+                  >
+                    <LogOut size={14} />
+                    {t('auth.logout')}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
 
         {/* Page content */}
-        <main
-          className="flex-1 overflow-y-auto p-6 print:p-0"
-          style={{ background: 'var(--bg-base)' }}
-        >
+        <main className="flex-1 overflow-y-auto p-6 print:p-0" style={{ background: 'var(--bg-base)' }}>
           {children}
         </main>
       </div>
+
+      {/* ── Command Palette ── */}
+      {cmdOpen && (
+        <div className="command-palette" onClick={() => setCmdOpen(false)}>
+          <div className="command-palette-box" onClick={e => e.stopPropagation()}>
+            {/* Search input */}
+            <div className="flex items-center gap-3 px-4 py-3.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <Search size={16} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+              <input
+                ref={cmdInputRef}
+                type="text"
+                placeholder="Search pages..."
+                value={cmdQuery}
+                onChange={e => setCmdQuery(e.target.value)}
+                className="flex-1 bg-transparent border-none outline-none text-sm"
+                style={{ color: 'var(--text-primary)', caretColor: 'var(--color-primary-400)', fontSize: 14 }}
+              />
+              <button onClick={() => setCmdOpen(false)} className="btn btn-ghost p-1 btn-icon" style={{ borderRadius: 6 }}>
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Results */}
+            <div className="p-2 max-h-80 overflow-y-auto">
+              {filteredCmds.length === 0 ? (
+                <p className="text-center py-6 text-sm" style={{ color: 'var(--text-tertiary)' }}>No results</p>
+              ) : filteredCmds.map(item => {
+                const Icon = item.icon;
+                const active = isActive(item.href);
+                return (
+                  <Link
+                    key={item.key}
+                    href={`/${locale}${item.href}`}
+                    onClick={() => setCmdOpen(false)}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 ${!active ? 'hover-bg-item' : ''}`}
+                    style={{
+                      background: active ? 'var(--sidebar-active-bg)' : 'transparent',
+                      color: active ? 'var(--color-primary-400)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    <Icon size={15} style={{ flexShrink: 0 }} />
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{t(`nav.${item.key}`)}</span>
+                    {active && <span className="ms-auto badge badge-info text-[10px]">Current</span>}
+                  </Link>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 py-2.5 flex items-center gap-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                <kbd style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '1px 5px', fontSize: 10 }}>↑↓</kbd> navigate
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                <kbd style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '1px 5px', fontSize: 10 }}>↵</kbd> open
+              </span>
+              <span className="text-[11px] ms-auto" style={{ color: 'var(--text-tertiary)' }}>
+                <kbd style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '1px 5px', fontSize: 10 }}>esc</kbd> close
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

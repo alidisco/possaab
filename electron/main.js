@@ -1,8 +1,52 @@
 // Electron Main Process
-const { app, BrowserWindow, ipcMain } = require('electron');
-const path = require('path');
+import { app, BrowserWindow } from 'electron';
+import path from 'path';
+import { spawn } from 'child_process';
 
 let mainWindow;
+let nextServerProcess;
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function startNextServerIfNeeded() {
+  // In development, run against the Next dev server you start manually (electron:dev)
+  if (!app.isPackaged) return;
+
+  // Next.js standalone output writes a server entry we can run with node.
+  // With `output: 'standalone'`, there should be: .next/standalone/server.js
+  const nextStandaloneServer = path.join(__dirname, '../.next/standalone/server.js');
+
+  // If it doesn't exist, fall back to current behavior (useful for debugging packaged builds).
+  // But for production you should run `npm run electron:build`.
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(nextStandaloneServer)) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+
+  nextServerProcess = spawn(process.execPath, [nextStandaloneServer], {
+    cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      // Bind Next to a predictable port for Electron to load.
+      PORT: '3456',
+      HOSTNAME: '127.0.0.1',
+      // Next uses different env vars depending on version; keep both just in case.
+      NEXT_TELEMETRY_DISABLED: '1',
+    },
+    stdio: 'inherit',
+    shell: false,
+  });
+
+  // Give Next a moment to boot
+  await wait(1500);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -21,14 +65,14 @@ function createWindow() {
     backgroundColor: '#0a0a0f',
   });
 
-  // In development, load from Next.js dev server
   const isDev = !app.isPackaged;
+  const url = 'http://localhost:3456';
+
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3456');
+    mainWindow.loadURL(url);
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, load from the standalone Next.js build
-    mainWindow.loadURL('http://localhost:3456');
+    mainWindow.loadURL(url);
   }
 
   mainWindow.on('closed', () => {
@@ -36,10 +80,16 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await startNextServerIfNeeded();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
-  app.quit();
+  if (process.platform !== 'darwin') {
+    if (nextServerProcess) nextServerProcess.kill();
+    app.quit();
+  }
 });
 
 app.on('activate', () => {
@@ -47,3 +97,4 @@ app.on('activate', () => {
     createWindow();
   }
 });
+

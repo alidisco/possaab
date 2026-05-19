@@ -317,10 +317,7 @@ export default function DashboardPage() {
                 <Link
                   key={href}
                   href={`/${locale}${href}`}
-                  className="flex items-center gap-3 p-2.5 rounded-lg group transition-colors"
-                  style={{ color: 'var(--text-secondary)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  className="quick-action-link"
                 >
                   <div className="p-2 rounded-lg shrink-0" style={{ background: iconBg }}>
                     <Icon size={14} style={{ color: iconColor }} />
@@ -352,12 +349,10 @@ export default function DashboardPage() {
                   {data.lowStockItems.map((item, i) => (
                     <div
                       key={item.id}
-                      className="px-4 py-3 transition-colors"
+                      className="low-stock-row"
                       style={{
                         borderBottom: i < data.lowStockItems.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                       }}
-                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                     >
                       <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                         {item.product_name}
