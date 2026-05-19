@@ -1,0 +1,569 @@
+# Saab Electric POS — Implementation Plan
+
+## Overview
+
+Offline-first desktop POS and inventory management system for an electrical retail/wholesale store. Runs on Windows laptops via Electron, supports LAN multi-device operation, barcode scanning, wholesale debt management, Arabic/English UI, thermal printing, and automatic backups.
+
+---
+
+## Architecture Decision
+
+```mermaid
+graph TB
+    subgraph "Laptop A — Main Server"
+        E1["Electron Main Process"]
+        NS["Next.js Standalone Server"]
+        DB["SQLite Database (better-sqlite3)"]
+        BK["Backup Engine"]
+        LAN["Express LAN API Server"]
+        E1 --> NS
+        E1 --> DB
+        E1 --> BK
+        E1 --> LAN
+    end
+
+    subgraph "Laptop B — Client POS"
+        E2["Electron Main Process"]
+        NS2["Next.js Standalone Server (UI only)"]
+        E2 --> NS2
+    end
+
+    NS2 -- "HTTP over LAN" --> LAN
+    LAN --> DB
+```
+
+### Key Architecture Choices
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Desktop wrapper | **Electron** (v33+) | Mature, printer access, filesystem, LAN networking |
+| Frontend framework | **Next.js 14** (standalone mode) | SSR/API routes inside Electron, TailwindCSS, App Router |
+| Database | **better-sqlite3** | Synchronous, fast, no server process, WAL mode, easy backup |
+| ORM / Query layer | **Drizzle ORM** | Type-safe, lightweight, works with better-sqlite3, built-in migrations |
+| LAN sync | **Express REST API** on main server | Simple, reliable, no internet needed |
+| Build & Package | **Electron Builder** | Windows installer (.exe), auto-update, code signing |
+| i18n | **next-intl** | Full RTL/Arabic support, server + client components |
+| State management | **Zustand** | Lightweight, perfect for POS cart state |
+| Barcode | **JsBarcode** (generation) + native scanner (keyboard wedge) | Scanners act as keyboard input — no special driver needed |
+| Printing | **electron-pos-printer** + native Electron `webContents.print()` | Thermal receipt + A4 invoice support |
+
+---
+
+## Project Structure
+
+```
+saabPOS/
+├── electron/
+│   ├── main.ts                  # Electron main process entry
+│   ├── preload.ts               # Context bridge (IPC exposure)
+│   ├── ipc/                     # IPC handlers organized by domain
+│   │   ├── products.ipc.ts
+│   │   ├── invoices.ipc.ts
+│   │   ├── inventory.ipc.ts
+│   │   ├── customers.ipc.ts
+│   │   ├── suppliers.ipc.ts
+│   │   ├── expenses.ipc.ts
+│   │   ├── reports.ipc.ts
+│   │   ├── backup.ipc.ts
+│   │   ├── auth.ipc.ts
+│   │   └── settings.ipc.ts
+│   ├── database/
+│   │   ├── connection.ts        # DB connection + WAL mode
+│   │   ├── schema.ts            # Drizzle schema definitions
+│   │   ├── migrations/          # SQL migration files
+│   │   └── seed.ts              # Default admin user + demo data
+│   ├── services/
+│   │   ├── backup.service.ts    # Auto-backup after sales
+│   │   ├── lan-server.ts        # Express API for LAN clients
+│   │   ├── printer.service.ts   # Thermal + A4 printing
+│   │   └── barcode.service.ts   # Barcode generation/label printing
+│   └── utils/
+│       ├── currency.ts          # USD/LBP conversion
+│       └── paths.ts             # App paths (userData, backups)
+│
+├── src/                         # Next.js App (renderer)
+│   ├── app/
+│   │   ├── [locale]/
+│   │   │   ├── layout.tsx       # Root layout with i18n + RTL
+│   │   │   ├── login/
+│   │   │   │   └── page.tsx
+│   │   │   ├── pos/
+│   │   │   │   └── page.tsx     # Main POS terminal
+│   │   │   ├── dashboard/
+│   │   │   │   ├── page.tsx     # Admin dashboard home
+│   │   │   │   ├── products/
+│   │   │   │   ├── inventory/
+│   │   │   │   ├── customers/
+│   │   │   │   ├── suppliers/
+│   │   │   │   ├── invoices/
+│   │   │   │   ├── expenses/
+│   │   │   │   ├── returns/
+│   │   │   │   ├── reports/
+│   │   │   │   ├── users/
+│   │   │   │   ├── settings/
+│   │   │   │   └── backups/
+│   │   │   └── barcode-print/
+│   │   │       └── page.tsx
+│   ├── components/
+│   │   ├── ui/                  # Reusable UI primitives (shadcn/ui)
+│   │   ├── pos/                 # POS-specific components
+│   │   ├── layout/              # Sidebar, header, navigation
+│   │   ├── products/            # Product & variant forms/tables
+│   │   ├── customers/           # Customer forms/tables
+│   │   ├── invoices/            # Invoice display/print templates
+│   │   └── reports/             # Charts and report views
+│   ├── hooks/
+│   │   ├── use-ipc.ts           # Generic IPC hook
+│   │   ├── use-barcode-scanner.ts
+│   │   └── use-keyboard-shortcuts.ts
+│   ├── lib/
+│   │   ├── ipc-client.ts        # Typed IPC invoke wrappers
+│   │   ├── store.ts             # Zustand stores (cart, auth, settings)
+│   │   └── utils.ts             # Formatting, currency, dates
+│   ├── i18n/
+│   │   ├── en.json
+│   │   ├── ar.json
+│   │   └── config.ts
+│   └── styles/
+│       └── globals.css          # TailwindCSS + custom tokens
+│
+├── resources/                   # App icons, installer assets
+├── package.json
+├── next.config.js
+├── tailwind.config.ts
+├── drizzle.config.ts
+├── tsconfig.json
+└── electron-builder.yml
+```
+
+---
+
+## Phased Implementation
+
+> [!IMPORTANT]
+> This is a large system. I recommend building it in **8 phases**, each producing a working, testable milestone. Each phase builds on the previous one. I estimate **~3-4 weeks** of focused development time total.
+
+---
+
+### Phase 1: Foundation & Scaffolding
+**Goal:** Working Electron + Next.js shell with database, auth, and basic navigation.
+
+#### Tasks
+1. **Initialize Next.js** inside `saabPOS/` with App Router, TypeScript, TailwindCSS
+2. **Set up Electron** — main process, preload script, BrowserWindow pointing to Next.js dev server (dev) / standalone build (prod)
+3. **Configure better-sqlite3** with Drizzle ORM — connection, WAL mode, `userData` path
+4. **Create database schema** — all tables from the PRD (users, products, product_variants, customers, suppliers, purchase_orders, invoices, invoice_items, payments, expenses, inventory_logs) + categories, settings, returns, return_items, loyalty_points, audit_logs
+5. **Implement auth** — login page, password hashing (bcrypt), session management via Zustand, role-based guard (Admin/Cashier)
+6. **Build shell layout** — sidebar navigation, header with user info, responsive layout
+7. **Set up i18n** — next-intl with English + Arabic, RTL toggle, locale switcher
+8. **Dev workflow** — `concurrently` to run Next.js dev + Electron together
+
+#### Deliverable
+App launches in Electron window → login → admin dashboard shell with sidebar, language switcher, RTL support.
+
+---
+
+### Phase 2: Product & Variant Management
+**Goal:** Full CRUD for products, categories, and variants with barcode support.
+
+#### Tasks
+1. **Categories CRUD** — create, edit, delete categories
+2. **Products CRUD** — create parent products with name, category, description, has_variants flag
+3. **Variants CRUD** — add/edit/delete variants under a product with all fields: barcode, SKU, wattage, color, size, unit_type, cost_price, retail_price, wholesale_price, stock_quantity, min_stock
+4. **Barcode generation** — auto-generate barcodes using JsBarcode if not manually entered
+5. **Product search** — fast search by name, barcode, SKU, category
+6. **Data validation** — unique barcodes, required fields, price validation
+7. **Unit types** — Piece, Meter, Yard, Box, Roll with decimal quantity support
+
+#### Deliverable
+Admin can create products with variants, assign barcodes, set pricing and stock levels.
+
+---
+
+### Phase 3: POS Terminal
+**Goal:** Fully functional point-of-sale screen with barcode scanning and receipt printing.
+
+#### Tasks
+1. **POS layout** — split view: product search/scan (left) + cart (right)
+2. **Barcode scanner integration** — keyboard wedge mode (scanner types into focused input), auto-detect variant
+3. **Cart management** — add/remove items, adjust quantities (including decimal for meters/yards), live total calculation
+4. **Customer selection** — Normal (walk-in) or Wholesale customer lookup
+5. **Price switching** — auto-apply retail vs wholesale price based on customer type
+6. **Payment flow** — Paid / Partial Payment / Unpaid selection
+7. **Currency handling** — USD/LBP toggle, auto-conversion using admin-set exchange rate
+8. **Invoice creation** — save to DB, update inventory, create payment record
+9. **Receipt printing** — thermal printer template (80mm), A4 invoice template
+10. **Keyboard shortcuts** — F1 (new sale), F2 (search), F5 (pay), Esc (cancel), etc.
+
+#### Deliverable
+Cashier can scan barcodes → build cart → select customer → process payment → print receipt. Inventory auto-deducts.
+
+---
+
+### Phase 4: Customer & Wholesale Management
+**Goal:** Wholesale accounts, credit limits, debt tracking, partial payments.
+
+#### Tasks
+1. **Customer CRUD** — create retail + wholesale customers with all fields
+2. **Credit limit system** — admin sets max debt per wholesaler, cashier gets alert when exceeded
+3. **Customer balance tracking** — outstanding balance auto-updates on invoice creation/payment
+4. **Payment history** — view all payments made against invoices
+5. **Partial payment** — record partial payments, update remaining balance
+6. **Customer statement** — printable statement of account per customer
+7. **Customer search** — fast lookup by name, phone, company
+
+#### Deliverable
+Full wholesale lifecycle: create account → sell on credit → track debt → receive partial payments → view balance history.
+
+---
+
+### Phase 5: Inventory, Suppliers & Purchase Orders
+**Goal:** Complete inventory management with supplier purchasing workflow.
+
+#### Tasks
+1. **Inventory dashboard** — real-time stock levels, variant-level view
+2. **Low stock alerts** — notification badge when stock ≤ min_stock
+3. **Stock adjustments** — manual add/subtract with reason logging (inventory_logs)
+4. **Inventory history** — full audit trail per variant
+5. **Supplier CRUD** — create/edit suppliers with contact info
+6. **Purchase orders** — create PO against supplier, add line items (variants + quantities + cost prices)
+7. **Receive stock** — mark PO as received → auto-update inventory quantities
+8. **Supplier balance tracking** — track amounts owed to suppliers
+9. **Dead stock report** — products with no sales in configurable period
+
+#### Deliverable
+Admin can create purchase orders, receive stock, track supplier balances, and get low-stock warnings.
+
+---
+
+### Phase 6: Returns, Expenses & Barcode Printing
+**Goal:** Return handling, expense tracking, and barcode label printing.
+
+#### Tasks
+1. **Return system** — return full invoice or selected items
+2. **Return inventory restoration** — auto-add returned items back to stock
+3. **Return reasons** — dropdown with customizable reasons
+4. **Refund tracking** — log refund amounts and methods
+5. **Expense tracking** — CRUD for expenses with categories (rent, electricity, salaries, transport, misc)
+6. **Expense reports** — monthly/yearly expense summaries
+7. **Barcode label printing** — generate and print labels (variant barcode + name + price)
+8. **Bulk barcode printing** — select multiple variants, print sheet of labels
+
+#### Deliverable
+Process returns, track expenses, print barcode labels in bulk.
+
+---
+
+### Phase 7: Reports, Analytics & Backup System
+**Goal:** Comprehensive reporting and automatic backup protection.
+
+#### Tasks
+1. **Sales reports** — daily, weekly, monthly, yearly with charts
+2. **Product reports** — most sold, least sold, profit per product
+3. **Profit reports** — revenue - cost - expenses = profit
+4. **Wholesale reports** — outstanding balances, unpaid invoices, payment history per customer
+5. **Inventory reports** — current stock value, low stock list, dead stock
+6. **Financial summary** — total revenue, total expenses, net profit, outstanding receivables
+7. **Report export** — export to PDF / Excel
+8. **Automatic backup** — after every sale, create DB backup file
+9. **Backup rotation** — keep last 20 backups, auto-delete oldest
+10. **Backup directory** — configurable (default `D:/SaabElectricBackups/`)
+11. **Manual backup/restore** — admin can trigger manual backup or restore from backup file
+12. **Audit logs** — track all user actions (login, product changes, price changes, deletions)
+
+#### Deliverable
+Full reporting dashboard with charts. Automatic + manual backup system with rotation.
+
+---
+
+### Phase 8: LAN Multi-Device & Polish
+**Goal:** Server/client LAN architecture, loyalty points, and final polish.
+
+#### Tasks
+1. **LAN server mode** — Laptop A runs Express API server alongside Electron app, serving database access over LAN
+2. **Client mode** — Laptop B's Electron app connects to Laptop A's IP:PORT instead of local DB
+3. **Connection config** — settings page to set mode (Server/Client) and server IP address
+4. **Connection health** — client shows connection status indicator, auto-reconnects
+5. **Conflict handling** — sequence-based invoice numbering to prevent collisions, optimistic locking
+6. **Loyalty points** — points earned per purchase, viewable in customer profile (foundation for future discounts)
+7. **Settings page** — exchange rate, backup directory, printer config, LAN config, language
+8. **Printer configuration** — select thermal/A4 printer, test print
+9. **Performance optimization** — database indexes, lazy loading, virtualized lists for large datasets
+10. **Security hardening** — contextIsolation, no nodeIntegration, input sanitization
+11. **Windows installer** — Electron Builder config for `.exe` installer
+12. **Final QA** — end-to-end testing of all workflows
+
+#### Deliverable
+Two-laptop setup working over LAN. Polished, production-ready application with installer.
+
+---
+
+## Database Schema (Complete)
+
+> [!NOTE]
+> Extended beyond PRD to include all necessary tables for the full feature set.
+
+```sql
+-- Core tables from PRD + extensions
+
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('admin', 'cashier')),
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name_en TEXT NOT NULL,
+    name_ar TEXT,
+    parent_id INTEGER REFERENCES categories(id),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name_en TEXT NOT NULL,
+    name_ar TEXT,
+    category_id INTEGER REFERENCES categories(id),
+    description TEXT,
+    has_variants INTEGER DEFAULT 0,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE product_variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    barcode TEXT UNIQUE,
+    sku TEXT UNIQUE,
+    variant_name TEXT,           -- e.g. "10W White"
+    wattage TEXT,
+    color TEXT,
+    size TEXT,
+    unit_type TEXT NOT NULL DEFAULT 'piece' 
+        CHECK(unit_type IN ('piece', 'meter', 'yard', 'box', 'roll')),
+    cost_price REAL NOT NULL DEFAULT 0,
+    retail_price REAL NOT NULL DEFAULT 0,
+    wholesale_price REAL NOT NULL DEFAULT 0,
+    stock_quantity REAL NOT NULL DEFAULT 0,
+    min_stock REAL NOT NULL DEFAULT 0,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK(type IN ('retail', 'wholesale')),
+    company_name TEXT,
+    name TEXT,
+    phone TEXT,
+    address TEXT,
+    notes TEXT,
+    credit_limit REAL,           -- NULL = no limit
+    balance REAL DEFAULT 0,      -- outstanding debt (positive = owes us)
+    loyalty_points INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT,
+    address TEXT,
+    notes TEXT,
+    balance REAL DEFAULT 0,      -- we owe supplier (positive = we owe)
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE purchase_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    total_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending' 
+        CHECK(status IN ('pending', 'received', 'cancelled')),
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE purchase_order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+    variant_id INTEGER NOT NULL REFERENCES product_variants(id),
+    quantity REAL NOT NULL,
+    unit_cost REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE invoices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_number TEXT UNIQUE NOT NULL,
+    customer_id INTEGER REFERENCES customers(id),
+    cashier_id INTEGER NOT NULL REFERENCES users(id),
+    payment_status TEXT NOT NULL DEFAULT 'paid' 
+        CHECK(payment_status IN ('paid', 'partial', 'unpaid')),
+    currency TEXT NOT NULL DEFAULT 'USD',
+    exchange_rate REAL NOT NULL DEFAULT 1,
+    subtotal REAL NOT NULL DEFAULT 0,
+    discount_amount REAL DEFAULT 0,
+    total_amount REAL NOT NULL DEFAULT 0,
+    paid_amount REAL NOT NULL DEFAULT 0,
+    remaining_amount REAL NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE invoice_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+    variant_id INTEGER NOT NULL REFERENCES product_variants(id),
+    quantity REAL NOT NULL,
+    unit_price REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+    customer_id INTEGER REFERENCES customers(id),
+    amount REAL NOT NULL,
+    payment_method TEXT DEFAULT 'cash' 
+        CHECK(payment_method IN ('cash', 'card', 'transfer', 'other')),
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE returns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+    cashier_id INTEGER NOT NULL REFERENCES users(id),
+    reason TEXT,
+    refund_amount REAL NOT NULL DEFAULT 0,
+    refund_method TEXT DEFAULT 'cash',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE return_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    return_id INTEGER NOT NULL REFERENCES returns(id),
+    invoice_item_id INTEGER NOT NULL REFERENCES invoice_items(id),
+    variant_id INTEGER NOT NULL REFERENCES product_variants(id),
+    quantity REAL NOT NULL,
+    unit_price REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT NOT NULL 
+        CHECK(category IN ('rent', 'electricity', 'salaries', 'transportation', 'misc')),
+    notes TEXT,
+    expense_date TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE inventory_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    variant_id INTEGER NOT NULL REFERENCES product_variants(id),
+    action_type TEXT NOT NULL 
+        CHECK(action_type IN ('sale', 'return', 'purchase', 'adjustment', 'initial')),
+    quantity_before REAL NOT NULL,
+    quantity_after REAL NOT NULL,
+    quantity_change REAL NOT NULL,
+    reference_type TEXT,         -- 'invoice', 'return', 'purchase_order', 'manual'
+    reference_id INTEGER,
+    notes TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id),
+    action TEXT NOT NULL,
+    entity_type TEXT,            -- 'product', 'invoice', 'customer', etc.
+    entity_id INTEGER,
+    details TEXT,                -- JSON string with change details
+    ip_address TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Performance indexes
+CREATE INDEX idx_variants_barcode ON product_variants(barcode);
+CREATE INDEX idx_variants_sku ON product_variants(sku);
+CREATE INDEX idx_variants_product ON product_variants(product_id);
+CREATE INDEX idx_invoices_customer ON invoices(customer_id);
+CREATE INDEX idx_invoices_cashier ON invoices(cashier_id);
+CREATE INDEX idx_invoices_date ON invoices(created_at);
+CREATE INDEX idx_invoice_items_invoice ON invoice_items(invoice_id);
+CREATE INDEX idx_payments_invoice ON payments(invoice_id);
+CREATE INDEX idx_inventory_logs_variant ON inventory_logs(variant_id);
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_expenses_date ON expenses(expense_date);
+CREATE INDEX idx_customers_type ON customers(type);
+CREATE INDEX idx_products_category ON products(category_id);
+```
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Stack confirmation** — The plan uses **TailwindCSS** as you specified. I'll use **TailwindCSS v3** (stable) unless you want v4. Please confirm.
+
+> [!IMPORTANT]
+> **UI component library** — I plan to use **shadcn/ui** for pre-built, customizable React components (tables, dialogs, forms, dropdowns). This dramatically speeds up development while keeping full control over styling. Is this acceptable?
+
+> [!WARNING]
+> **Receipt template design** — I need to know your receipt/invoice format preferences. Should I design the thermal receipt layout (store name, logo, item list, totals, footer), or do you have an existing template?
+
+> [!IMPORTANT]
+> **Default admin credentials** — On first launch, the system will seed a default admin user. What username/password should be used? (e.g., `admin` / `saab2024`)
+
+## Open Questions
+
+> [!IMPORTANT]
+> 1. **Invoice numbering format** — Do you want a specific format? e.g., `INV-2024-00001`, or just sequential numbers `1, 2, 3...`?
+> 2. **Backup directory** — The PRD mentions `D:/SaabElectricBackups/`. Should I use this exact path, or make it configurable with this as the default?
+> 3. **Expense categories** — The PRD lists Electricity, Rent, Salaries, Transportation, Misc. Should the admin be able to add custom categories, or is this fixed list sufficient?
+> 4. **Product images** — Should products have image support, or is this text/barcode only?
+> 5. **Discount system** — The PRD doesn't mention per-item or per-invoice discounts during POS checkout. Should I add discount support (percentage or fixed amount)?
+> 6. **LAN port** — Any preference for the LAN server port? I'll default to `3456` to avoid conflicts.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Database schema validation — all migrations run without errors
+- IPC handler tests — CRUD operations for each entity return correct data
+- Currency conversion — exchange rate calculations verified
+- Inventory deduction — sale creates correct inventory log entries
+- Backup creation — file created in correct directory with correct content
+
+### Manual Verification
+- **Phase 1:** App launches in Electron → login works → sidebar navigates → Arabic RTL renders correctly
+- **Phase 3:** Scan a barcode → item appears in cart → process payment → receipt prints → stock deducts
+- **Phase 4:** Create wholesale customer → sell on credit → make partial payment → balance updates
+- **Phase 5:** Create PO → receive stock → inventory updates → low stock alert triggers
+- **Phase 8:** Connect Laptop B to Laptop A over LAN → both can create invoices simultaneously
+
+### Browser-Based Testing
+- UI rendering verification at each phase via Electron window screenshots
+- RTL layout validation for all Arabic screens
+- Responsive layout testing at different window sizes
